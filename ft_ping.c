@@ -118,7 +118,7 @@ int main(int argc, char* argv[]) {
     pckt.hdr.un.echo.sequence = message_amount++;
     pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
 
-    err = sendto(ping_socket, pckt.msg, sizeof(pckt.msg), 0, res->ai_addr, res->ai_addrlen);
+    err = sendto(ping_socket, &pckt, sizeof(pckt), 0, res->ai_addr, res->ai_addrlen);
     if (err == -1) {
         printf("ERROR: %s\n", strerror(errno));
         free(res);
