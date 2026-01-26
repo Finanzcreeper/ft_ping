@@ -14,6 +14,11 @@
 #define PING_SLEEP_RATE 1000000  // ping sleep rate (in microseconds)
 #define RECV_TIMEOUT 1      // timeout for receiving packets (in seconds)
 
+struct ping_pkt {
+    struct icmphdr hdr;
+    char msg[PING_PKT_S - sizeof(struct icmphdr)];
+};
+
 void display_help(){
     printf("HELP TEXT HERE!\n");
     return;
@@ -38,11 +43,51 @@ unsigned short checksum(void *b, int len) {
     result = ~sum;
     return result;
 }
+int setup(char* adress, int* ping_socket, struct addrinfo** res, char* host){
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = 0;
 
-struct ping_pkt {
-    struct icmphdr hdr;
-    char msg[PING_PKT_S - sizeof(struct icmphdr)];
-};
+    int err = getaddrinfo(adress, NULL, &hints, res);
+    if (err != 0) {
+        const char* errmsg = gai_strerror(err);
+        printf ("%s\n",errmsg);
+        return(-1);
+    }
+
+    err = getnameinfo((*res)->ai_addr, (*res)->ai_addrlen, host, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
+    if(err != 0) {
+        printf("Could not resolve reverse lookup of hostname\n");
+        const char* errmsg = gai_strerror(err);
+        printf ("%s\n",errmsg);
+        return (-1);
+    }
+
+    *ping_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+    if (ping_socket < 0) {
+        printf("Socket file descriptor not received!\n");
+        free(res);
+        return (-1);
+    }
+}
+
+struct ping_pkt create_packet(int* message_nr) {
+    struct ping_pkt pckt;
+    bzero(&pckt, sizeof(pckt));
+    pckt.hdr.type = ICMP_ECHO;
+    pckt.hdr.un.echo.id = getpid();
+    int c = 0;
+    while ( c < sizeof(pckt.msg) - 1) {
+        pckt.msg[c] = c + '0';
+        c++;
+    }
+    pckt.msg[c] = 0;
+    pckt.hdr.un.echo.sequence = (*message_nr)++;
+    pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
+    return (pckt);
+}
 
 int main(int argc, char* argv[]) {
     char* option = "";
@@ -81,49 +126,52 @@ int main(int argc, char* argv[]) {
         printf("ping: usage error: Destination address required\n");
         return(0);
     }
-
+    int ping_socket = 0;
     struct addrinfo* res;
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_PASSIVE;
-
-    int err = getaddrinfo(adress, NULL, &hints, &res);
-    if (err < 0) {
-        const char* errmsg = gai_strerror(err);
-        printf ("%s\n",errmsg);
+    char host[NI_MAXHOST];
+    if(setup(adress, &ping_socket, &res, host) == -1) {
         return(0);
     }
-    int ping_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
-    if (ping_socket < 0) {
-        printf("\nSocket file descriptor not received!\n");
-        free(res);
-        return (0);
-    } else {
-        printf("\nSocket file descriptor %d received\n", ping_socket);
-    }
-
     int message_amount = 0;
-    struct ping_pkt pckt;
-    bzero(&pckt, sizeof(pckt));
-    pckt.hdr.type = ICMP_ECHO;
-    pckt.hdr.un.echo.id = getpid();
-    int c = 0;
-    while ( c < sizeof(pckt.msg) - 1) {
-        pckt.msg[c] = c + '0';
-        c++;
-    }
-    pckt.msg[c] = 0;
-    pckt.hdr.un.echo.sequence = message_amount++;
-    pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
+    int message_sent = 1;
+    int recieved = 0;
+    char return_buffer[1000];
+    struct ping_pkt pckt = create_packet(&message_amount);
 
-    err = sendto(ping_socket, &pckt, sizeof(pckt), 0, res->ai_addr, res->ai_addrlen);
-    if (err == -1) {
-        printf("ERROR: %s\n", strerror(errno));
-        free(res);
-        close(ping_socket);
-        return(0);
+    void* addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+
+    char ipstr[16];
+    bzero (ipstr, 16);
+    if(inet_ntop(res->ai_family, addr, ipstr, sizeof(ipstr)) == NULL) {
+        printf("ERROR Adrres could not be translated to human readable form\n");
+    }
+    printf("PING %s (%s)(%s) %ld bytes of data. \n",adress, ipstr, host, sizeof(pckt));
+
+    while(1) {
+        struct ping_pkt pckt = create_packet(&message_amount);
+        message_sent = 1;
+        int sent_amount = sendto(ping_socket, &pckt, sizeof(pckt), 0, res->ai_addr, res->ai_addrlen);
+        if (sent_amount == -1) {
+            printf("send ERROR: %s\n", strerror(errno));
+            message_sent = 0;
+        }
+        if (message_sent == 1) {
+            struct sockaddr_in recieve_address;
+            int r_addr_len = sizeof(recieve_address);
+            bzero(return_buffer,sizeof(return_buffer));
+            recieved = recvfrom(ping_socket, return_buffer, sizeof(return_buffer), 0, (struct sockaddr*)&recieve_address, &r_addr_len);
+            if(recieved <= 0) {
+                printf("Recieve ERROR: %s\n", strerror(errno));
+            }
+            printf("%d bytes from %s\n", recieved, host);
+        }
+
+        if (checksum(return_buffer, recieved) != 0) {
+            printf("RETURN PACKET BROKEN!\n");
+        } else {
+            printf("RETURN PACKET %d OK!\n", message_amount);
+        }
+        usleep(1000000);
     }
 
     free(res);
