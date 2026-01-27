@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <netinet/ip_icmp.h>
 #include <signal.h>
+#include <sys/time.h>
 
 // Define the Packet Constants
 #define PING_PKT_S 64       // ping packet size
@@ -161,6 +162,9 @@ int main(int argc, char* argv[]) {
     int return_message_amount = 0;
     sent_message_amount = 0;
     signal(SIGINT, signalHandler);
+
+    struct timeval send_time;
+    struct timeval recieve_time;
     while(running == 1) {
         struct ping_pkt pckt = create_packet(&sent_message_amount);
         message_sent = 1;
@@ -170,7 +174,10 @@ int main(int argc, char* argv[]) {
             printf("ping: sending packet: %s\n", strerror(errno));
             message_sent = 0;
         }
-        usleep(500000);
+        int err = gettimeofday(&send_time, NULL);
+        if (err != 0) {
+            printf("ping: cannot get sending time: %s\n", strerror(errno));
+        }
         if (message_sent == 1) {
             struct sockaddr_in recieve_address;
             int r_addr_len = sizeof(recieve_address);
@@ -180,7 +187,13 @@ int main(int argc, char* argv[]) {
                 printf("Recieve ERROR: %s\n", strerror(errno));
                 recieved = 0;
             }
-            printf("%d bytes from %s: icmp_seq:=%d\n", recieved, host, sent_message_amount);
+            int err = gettimeofday(&recieve_time, NULL);
+            if (err != 0) {
+                printf("ping: cannot get recieve time: %s\n", strerror(errno));
+            }
+            int ms =(recieve_time.tv_sec - send_time.tv_sec) * 1000 + (recieve_time.tv_usec - send_time.tv_usec) / 1000;
+            int us =(recieve_time.tv_usec - send_time.tv_usec) % 1000;
+            printf("%d bytes from %s: icmp_seq:=%d, time=%d,%d ms\n", recieved, host, sent_message_amount, ms, us);
             if (checksum(return_buffer, recieved) == 0) {
                 ++return_message_amount;
             }
@@ -190,6 +203,7 @@ int main(int argc, char* argv[]) {
     }
 
     float packetloss_percentage = (sent_message_amount - return_message_amount) / (double)sent_message_amount * 100.0;
+    printf("--- %s ping statistics ---\n", adress);
     printf("%d packets transmitted, %d packtes recieved, %f%% packet loss\n", sent_message_amount, return_message_amount, packetloss_percentage);
 
     free(res);
