@@ -191,14 +191,17 @@ int main(int argc, char* argv[]) {
             if (err != 0) {
                 printf("ping: cannot get recieve time: %s\n", strerror(errno));
             }
-            int ms =(recieve_time.tv_sec - send_time.tv_sec) * 1000 + (recieve_time.tv_usec - send_time.tv_usec) / 1000;
-            int us =(recieve_time.tv_usec - send_time.tv_usec) % 1000;
-            printf("%d bytes from %s: icmp_seq:=%d, time=%d,%d ms\n", recieved, host, sent_message_amount, ms, us);
+
+            long sec_diff = recieve_time.tv_sec - send_time.tv_sec;
+            long usec_diff = recieve_time.tv_usec - send_time.tv_usec;
+            int ms_pre_comma = sec_diff * 1000 + usec_diff / 1000;
+            int ms_after_comma = sec_diff * 1000 + usec_diff % 1000;
+            printf("%d bytes from %s: icmp_seq:=%d, time=%d,%d ms NEW\n", recieved, host, sent_message_amount, ms_pre_comma, ms_after_comma);
+
             if (checksum(return_buffer, recieved) == 0) {
                 ++return_message_amount;
             }
         }
-
         usleep(1000000);
     }
 
