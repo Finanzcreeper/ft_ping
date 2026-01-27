@@ -8,16 +8,23 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <netinet/ip_icmp.h>
+#include <signal.h>
 
 // Define the Packet Constants
 #define PING_PKT_S 64       // ping packet size
 #define PING_SLEEP_RATE 1000000  // ping sleep rate (in microseconds)
 #define RECV_TIMEOUT 1      // timeout for receiving packets (in seconds)
 
+int running = 1;
+
 struct ping_pkt {
     struct icmphdr hdr;
     char msg[PING_PKT_S - sizeof(struct icmphdr)];
 };
+
+void signalHandler(int sig) {
+    running = 0;
+}
 
 void display_help(){
     printf("HELP TEXT HERE!\n");
@@ -132,14 +139,13 @@ int main(int argc, char* argv[]) {
     if(setup(adress, &ping_socket, &res, host) == -1) {
         return(0);
     }
-    int message_amount = 0;
+    int sent_message_amount = 0;
     int message_sent = 1;
     int recieved = 0;
     char return_buffer[1000];
-    struct ping_pkt pckt = create_packet(&message_amount);
-
+    struct ping_pkt pckt = create_packet(&sent_message_amount);
     void* addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-
+    
     char ipstr[16];
     bzero (ipstr, 16);
     if(inet_ntop(res->ai_family, addr, ipstr, sizeof(ipstr)) == NULL) {
@@ -147,14 +153,24 @@ int main(int argc, char* argv[]) {
     }
     printf("PING %s (%s)(%s) %ld bytes of data. \n",adress, ipstr, host, sizeof(pckt));
 
-    while(1) {
-        struct ping_pkt pckt = create_packet(&message_amount);
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    setsockopt(ping_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    int return_message_amount = 0;
+    sent_message_amount = 0;
+    signal(SIGINT, signalHandler);
+    while(running == 1) {
+        struct ping_pkt pckt = create_packet(&sent_message_amount);
         message_sent = 1;
         int sent_amount = sendto(ping_socket, &pckt, sizeof(pckt), 0, res->ai_addr, res->ai_addrlen);
         if (sent_amount == -1) {
-            printf("send ERROR: %s\n", strerror(errno));
+            sent_message_amount -= 1;
+            printf("ping: sending packet: %s\n", strerror(errno));
             message_sent = 0;
         }
+        usleep(500000);
         if (message_sent == 1) {
             struct sockaddr_in recieve_address;
             int r_addr_len = sizeof(recieve_address);
@@ -162,19 +178,20 @@ int main(int argc, char* argv[]) {
             recieved = recvfrom(ping_socket, return_buffer, sizeof(return_buffer), 0, (struct sockaddr*)&recieve_address, &r_addr_len);
             if(recieved <= 0) {
                 printf("Recieve ERROR: %s\n", strerror(errno));
+                recieved = 0;
             }
-            printf("%d bytes from %s\n", recieved, host);
+            printf("%d bytes from %s: icmp_seq:=%d\n", recieved, host, sent_message_amount);
+            if (checksum(return_buffer, recieved) == 0) {
+                ++return_message_amount;
+            }
         }
 
-        if (checksum(return_buffer, recieved) != 0) {
-            printf("RETURN PACKET BROKEN!\n");
-        } else {
-            printf("RETURN PACKET %d OK!\n", message_amount);
-        }
         usleep(1000000);
     }
 
+    float packetloss_percentage = (sent_message_amount - return_message_amount) / (double)sent_message_amount * 100.0;
+    printf("%d packets transmitted, %d packtes recieved, %f%% packet loss\n", sent_message_amount, return_message_amount, packetloss_percentage);
+
     free(res);
     close(ping_socket);
-    printf("hello world!\n");
 }
